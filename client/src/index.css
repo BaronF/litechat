@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    /* 防止 iOS 长按出现菜单/高亮（消息气泡除外，单独处理） */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    /* iOS Safari 用 dvh 处理地址栏动态高度；回退用 100% */
+    height: 100%;
+    height: -webkit-fill-available;
+  }
+
+  body {
+    height: 100%;
+    height: -webkit-fill-available;
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+      'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    /* 防止 iOS 弹性滚动导致整个页面上下拖动 */
+    overscroll-behavior: none;
+    overflow: hidden;
+  }
+
+  #root {
+    height: 100%;
+    height: -webkit-fill-available;
+    /* 适配底部 Home 条安全区 */
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* 防止 iOS 双击缩放 */
+  button, a, input, textarea {
+    touch-action: manipulation;
+  }
+
+  /* 输入框禁止 iOS 自动放大（font-size >= 16px 才不会触发缩放） */
+  input, textarea, select {
+    font-size: 16px;
+  }
+}
+
+@layer utilities {
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* iOS 可滚动区域需要加这个才顺滑 */
+  .scroll-smooth-ios {
+    -webkit-overflow-scrolling: touch;
+    overflow-y: auto;
+  }
+
+  /* 顶部安全区内边距（用于 header） */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  /* 底部安全区内边距（用于输入框） */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* 自定义滚动条（桌面端） */
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #e5e7eb;
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #d1d5db;
+  }
+}

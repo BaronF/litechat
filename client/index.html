@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+
+    <!-- iOS PWA 必须 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="轻聊" />
+
+    <!-- 防止 iOS Safari 自动识别电话号码/邮箱 -->
+    <meta name="format-detection" content="telephone=no, email=no, address=no" />
+
+    <!-- viewport：禁止用户缩放，适配 iOS 安全区 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <!-- iOS 各尺寸图标 -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/icon-152.png" />
+    <link rel="apple-touch-icon" sizes="120x120" href="/icon-120.png" />
+
+    <!-- 主题色（影响 Safari 顶部状态栏颜色） -->
+    <meta name="theme-color" content="#22c55e" />
+    <meta name="msapplication-TileColor" content="#22c55e" />
+
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+    <title>轻聊 LiteChat</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

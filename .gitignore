@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+server/node_modules/
+client/node_modules/
+
+# Build output
+client/dist/
+
+# Database
+server/chat.db
+server/chat.db-wal
+server/chat.db-shm
+
+# Uploads (媒体文件不提交)
+server/uploads/images/*
+server/uploads/videos/*
+server/uploads/voices/*
+!server/uploads/images/.gitkeep
+!server/uploads/videos/.gitkeep
+!server/uploads/voices/.gitkeep
+
+# Env
+.env
+.env.local
+.env.production
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Vite
+client/.vite/
