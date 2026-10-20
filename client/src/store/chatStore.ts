@@ -45,6 +45,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   loadMessages: async (convId, before) => {
     set({ isLoadingMsgs: true });
+    const existingIdsAtStart = new Set((get().messages[convId] || []).map((message) => message.id));
     try {
       const params: Record<string, string | number> = { limit: 50 };
       if (before) params.before = before;
@@ -52,9 +53,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const msgs: Message[] = res.data;
       set((state) => {
         const existing = state.messages[convId] || [];
-        const merged = before
-          ? [...msgs, ...existing]
-          : msgs;
+        const currentMessages = before
+          ? existing
+          : existing.filter((message) => !existingIdsAtStart.has(message.id));
+        const byId = new Map(currentMessages.map((message) => [message.id, message]));
+        msgs.forEach((message) => byId.set(message.id, message));
+        const merged = [...byId.values()].sort((a, b) => a.created_at - b.created_at);
         return { messages: { ...state.messages, [convId]: merged }, isLoadingMsgs: false };
       });
       return msgs;

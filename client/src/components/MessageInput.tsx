@@ -3,9 +3,11 @@ import {
   Send, Image, Video, Mic
 } from 'lucide-react';
 import { getSocket } from '../hooks/useSocket';
+import { useChatStore } from '../store/chatStore';
 import api from '../utils/api';
 import { extractUrl } from '../utils/format';
 import VoiceRecorder from './VoiceRecorder';
+import { Message } from '../types';
 
 interface Props {
   conversationId: string;
@@ -19,6 +21,7 @@ export default function MessageInput({ conversationId }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { addMessage } = useChatStore();
 
   const emitTyping = useCallback((isTyping: boolean) => {
     const socket = getSocket();
@@ -45,7 +48,13 @@ export default function MessageInput({ conversationId }: Props) {
 
     setText('');
     emitTyping(false);
-    socket.emit('send_message', { conversationId, type, content });
+    socket.emit('send_message', { conversationId, type, content }, (response: {
+      message?: Message;
+      error?: string;
+    }) => {
+      if (response.message) addMessage(response.message);
+      else if (response.error) setText(trimmed);
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
