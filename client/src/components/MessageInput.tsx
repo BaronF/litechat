@@ -3,13 +3,9 @@ import {
   Send, Image, Video, Mic
 } from 'lucide-react';
 import { getSocket } from '../hooks/useSocket';
-import { useChatStore } from '../store/chatStore';
-import { useAuthStore } from '../store/authStore';
 import api from '../utils/api';
 import { extractUrl } from '../utils/format';
 import VoiceRecorder from './VoiceRecorder';
-import { v4 as uuidv4 } from 'uuid';
-import { Message } from '../types';
 
 interface Props {
   conversationId: string;
@@ -23,8 +19,6 @@ export default function MessageInput({ conversationId }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { addMessage } = useChatStore();
-  const { user } = useAuthStore();
 
   const emitTyping = useCallback((isTyping: boolean) => {
     const socket = getSocket();
@@ -46,25 +40,11 @@ export default function MessageInput({ conversationId }: Props) {
     const type = url && trimmed === url ? 'link' : 'text';
     const content = type === 'link' ? url! : trimmed;
 
+    const socket = getSocket();
+    if (!socket) return;
+
     setText('');
     emitTyping(false);
-
-    const socket = getSocket();
-    if (!socket || !user) return;
-
-    // 乐观更新：发出去立刻显示，不等服务器回包
-    const optimisticMsg: Message = {
-      id: uuidv4(),
-      conversation_id: conversationId,
-      sender_id: user.id,
-      sender_nickname: user.nickname,
-      sender_avatar: user.avatar,
-      type,
-      content,
-      created_at: Date.now(),
-    };
-    addMessage(optimisticMsg);
-
     socket.emit('send_message', { conversationId, type, content });
   };
 

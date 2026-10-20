@@ -79,7 +79,11 @@ router.get('/conversations', authMiddleware, async (req, res) => {
     return conv;
   }));
 
-  res.json(result);
+  res.json(result.map((conv) => ({
+    ...conv,
+    created_at: Number(conv.created_at),
+    last_message_at: conv.last_message_at == null ? null : Number(conv.last_message_at)
+  })));
 });
 
 router.post('/conversations/private', authMiddleware, async (req, res) => {
@@ -183,7 +187,10 @@ router.get('/conversations/:id/messages', authMiddleware, async (req, res) => {
     `, [req.params.id, pageSize]);
   }
 
-  res.json(result.rows.reverse());
+  res.json(result.rows.reverse().map((message) => ({
+    ...message,
+    created_at: Number(message.created_at)
+  })));
 });
 
 router.post('/conversations/:id/read', authMiddleware, async (req, res) => {
