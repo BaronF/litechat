@@ -1,4 +1,3 @@
-const fetch = require('node-fetch');
 const cheerio = require('cheerio');
 
 async function getLinkPreview(url) {
@@ -6,10 +5,11 @@ async function getLinkPreview(url) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
 
+    // 使用 Node 18+ 内置 fetch，不依赖 node-fetch/undici
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; ChatBot/1.0)'
+        'User-Agent': 'Mozilla/5.0 (compatible; LiteChat/1.0)'
       }
     });
     clearTimeout(timeout);
