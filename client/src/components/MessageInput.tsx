@@ -8,6 +8,7 @@ import api from '../utils/api';
 import { extractUrl } from '../utils/format';
 import VoiceRecorder from './VoiceRecorder';
 import { Message } from '../types';
+import { v4 as uuidv4 } from 'uuid';
 
 interface Props {
   conversationId: string;
@@ -17,10 +18,12 @@ export default function MessageInput({ conversationId }: Props) {
   const [text, setText] = useState('');
   const [showVoice, setShowVoice] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [sendFeedback, setSendFeedback] = useState('');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingMessageRef = useRef<{ id: string; content: string } | null>(null);
   const { addMessage } = useChatStore();
 
   const emitTyping = useCallback((isTyping: boolean) => {
@@ -29,7 +32,10 @@ export default function MessageInput({ conversationId }: Props) {
   }, [conversationId]);
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
+    const value = e.target.value;
+    setText(value);
+    if (pendingMessageRef.current?.content !== value.trim()) pendingMessageRef.current = null;
+    setSendFeedback('');
     emitTyping(true);
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     typingTimerRef.current = setTimeout(() => emitTyping(false), 2000);
@@ -44,17 +50,66 @@ export default function MessageInput({ conversationId }: Props) {
     const content = type === 'link' ? url! : trimmed;
 
     const socket = getSocket();
-    if (!socket) return;
+    if (!socket) {
+      setSendFeedback('聊天连接尚未准备好，消息仍保留在输入框中，请稍后重试。');
+      return;
+    }
 
-    setText('');
+    const pending = pendingMessageRef.current;
+    const clientMessageId = pending?.content === content ? pending.id : uuidv4();
+    pendingMessageRef.current = { id: clientMessageId, content };
+    setIsSending(true);
+    setSendFeedback(socket.connected ? '正在发送...' : '正在连接聊天服务器...');
     emitTyping(false);
-    socket.emit('send_message', { conversationId, type, content }, (response: {
-      message?: Message;
-      error?: string;
-    }) => {
-      if (response.message) addMessage(response.message);
-      else if (response.error) setText(trimmed);
-    });
+
+    const sendWhenConnected = () => {
+      setSendFeedback('正在发送...');
+      socket.timeout(15000).emit('send_message', { conversationId, type, content, clientMessageId }, (
+        error: Error | null,
+        response?: {
+          message?: Message;
+          error?: string;
+        }
+      ) => {
+        setIsSending(false);
+        if (error) {
+          setSendFeedback('未收到服务器确认，消息草稿已保留；请先查看聊天记录再重试。');
+          return;
+        }
+        if (response?.error) {
+          pendingMessageRef.current = null;
+          setSendFeedback(response.error);
+          return;
+        }
+        if (!response?.message) {
+          setSendFeedback('发送失败，消息草稿已保留，请重试。');
+          return;
+        }
+
+        addMessage(response.message);
+        pendingMessageRef.current = null;
+        setText((current) => current.trim() === trimmed ? '' : current);
+        setSendFeedback('');
+      });
+    };
+
+    if (socket.connected) {
+      sendWhenConnected();
+      return;
+    }
+
+    let connectionTimer: ReturnType<typeof setTimeout>;
+    const onConnect = () => {
+      clearTimeout(connectionTimer);
+      sendWhenConnected();
+    };
+    connectionTimer = setTimeout(() => {
+      socket.off('connect', onConnect);
+      setIsSending(false);
+      setSendFeedback('连接超时，消息已保留；连接恢复后请重新发送。');
+    }, 15000);
+    socket.once('connect', onConnect);
+    socket.connect();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -172,6 +227,12 @@ export default function MessageInput({ conversationId }: Props) {
         </div>
       )}
 
+      {sendFeedback && (
+        <div role="status" aria-live="polite" className={`px-4 pt-2 text-xs ${isSending ? 'text-gray-500' : 'text-red-600'}`}>
+          {sendFeedback}
+        </div>
+      )}
+
       <div className="flex items-end gap-2 px-4 py-3">
         {/* Tools */}
         <div className="flex gap-1 pb-1">
@@ -210,6 +271,7 @@ export default function MessageInput({ conversationId }: Props) {
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          disabled={isSending}
           placeholder="输入消息，粘贴链接可预览...（Enter 发送，Shift+Enter 换行）"
           rows={1}
           className="flex-1 resize-none bg-gray-100 rounded-2xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-100 max-h-28 overflow-y-auto leading-relaxed"
@@ -223,8 +285,10 @@ export default function MessageInput({ conversationId }: Props) {
 
         {/* Send button */}
         <button
+          type="button"
           onClick={sendTextMessage}
           disabled={!text.trim() || isSending}
+          aria-label="发送消息"
           className="w-10 h-10 bg-green-500 hover:bg-green-600 disabled:bg-gray-200 rounded-full flex items-center justify-center transition-colors shadow flex-shrink-0"
         >
           <Send className="w-4 h-4 text-white" />
