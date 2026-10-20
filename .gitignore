@@ -3,8 +3,8 @@ node_modules/
 server/node_modules/
 client/node_modules/
 
-# Build output
-client/dist/
+# Build output (本地构建后提交 dist，Railway 无需重复构建)
+# client/dist/
 
 # Database
 server/chat.db

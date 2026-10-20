@@ -3,14 +3,10 @@ nixPkgs = ["nodejs_20"]
 
 [phases.install]
 cmds = [
-  "npm install --prefix server",
-  "npm install --prefix client"
+  "npm install --prefix server"
 ]
 
-[phases.build]
-cmds = [
-  "npm run build --prefix client"
-]
+# 前端已预构建，无需 build 阶段
 
 [start]
 cmd = "NODE_ENV=production node server/src/index.js"

@@ -3,9 +3,7 @@
   "version": "1.0.0",
   "description": "轻量级即时聊天应用",
   "scripts": {
-    "build": "cd client && npm install && npm run build",
-    "start": "node server/src/index.js",
-    "install:all": "cd server && npm install && cd ../client && npm install"
+    "start": "node server/src/index.js"
   },
   "engines": {
     "node": ">=18.0.0"
