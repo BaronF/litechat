@@ -9,7 +9,11 @@ const onlineUsers = new Map();
 function setupSocket(server) {
   const io = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
-    maxHttpBufferSize: 50 * 1024 * 1024
+    maxHttpBufferSize: 50 * 1024 * 1024,
+    connectionStateRecovery: {
+      maxDisconnectionDuration: 2 * 60 * 1000,
+      skipMiddlewares: false
+    }
   });
 
   // JWT 认证中间件

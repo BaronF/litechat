@@ -14,7 +14,9 @@ export function useSocket() {
     setTyping,
     resetUnread,
     activeConvId,
-    updateUserStatus
+    updateUserStatus,
+    loadConversations,
+    loadMessages
   } = useChatStore();
   const activeConvRef = useRef(activeConvId);
   activeConvRef.current = activeConvId;
@@ -30,6 +32,18 @@ export function useSocket() {
     }
 
     const socket = socketInstance;
+    const syncMessages = () => {
+      void loadConversations();
+      if (activeConvRef.current) void loadMessages(activeConvRef.current);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!socket.connected) socket.connect();
+      syncMessages();
+    };
+
+    socket.on('connect', syncMessages);
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     socket.on('new_message', (msg: Message) => {
       addMessage(msg);
@@ -58,6 +72,8 @@ export function useSocket() {
     });
 
     return () => {
+      socket.off('connect', syncMessages);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       socket.off('new_message');
       socket.off('message_update');
       socket.off('typing');
