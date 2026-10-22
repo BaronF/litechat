@@ -22,6 +22,7 @@ export interface Message {
   link_title?: string | null;
   link_description?: string | null;
   link_image?: string | null;
+  mention_user_ids?: string[];
   created_at: number;
 }
 
@@ -31,10 +32,12 @@ export interface Conversation {
   name?: string | null;
   avatar?: string | null;
   created_at: number;
+  created_by?: string | null;
   last_message?: string | null;
   last_message_type?: MessageType | null;
   last_message_at?: number | null;
   last_sender_nickname?: string | null;
   unread_count?: number;
+  mention_unread_count?: number;
   otherUser?: User;
 }

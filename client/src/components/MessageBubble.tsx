@@ -121,6 +121,7 @@ function LinkMessage({ content, title, description, image }: {
 export default function MessageBubble({ message, showAvatar, isGroup }: Props) {
   const { user } = useAuthStore();
   const isSelf = message.sender_id === user?.id;
+  const textParts = message.content.split(/(@[^\s@]+)/g);
 
   return (
     <div className={`flex items-end gap-2 ${isSelf ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -152,7 +153,12 @@ export default function MessageBubble({ message, showAvatar, isGroup }: Props) {
             : ''
         }`}>
           {message.type === 'text' && (
-            <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.content}</p>
+            <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+              {textParts.map((part, index) => part.startsWith('@') && message.mention_user_ids?.length
+                ? <span key={index} className={isSelf ? 'font-semibold underline decoration-green-200' : 'font-semibold text-green-700'}>{part}</span>
+                : part
+              )}
+            </p>
           )}
           {message.type === 'image' && message.file_url && (
             <ImageMessage url={message.file_url} />

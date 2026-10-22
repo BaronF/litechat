@@ -7,6 +7,22 @@ const { getLinkPreview } = require('./linkPreview');
 
 const router = express.Router();
 
+function notifyConversationMembership(req, userIds, conversationId, event) {
+  const io = req.app.get('io');
+  if (!io) return;
+  for (const userId of userIds) {
+    const room = `user:${userId}`;
+    if (event === 'added') io.in(room).socketsJoin(conversationId);
+    if (event === 'removed') io.in(room).socketsLeave(conversationId);
+    io.to(room).emit('conversation_membership_changed', { conversationId, event });
+  }
+}
+
+function notifyCurrentConversationMembers(req, conversationId) {
+  const io = req.app.get('io');
+  if (io) io.to(conversationId).emit('conversation_members_changed', { conversationId });
+}
+
 // ============ 用户相关 ============
 
 router.get('/users/search', authMiddleware, async (req, res) => {
@@ -53,13 +69,20 @@ router.get('/conversations', authMiddleware, async (req, res) => {
       (SELECT COUNT(*) FROM messages msg
        WHERE msg.conversation_id = c.id
        AND msg.sender_id != $1
-       AND msg.id NOT IN (
-         SELECT message_id FROM message_reads WHERE user_id = $1
-       )) as unread_count
+       AND NOT EXISTS (
+         SELECT 1 FROM message_reads mr WHERE mr.message_id = msg.id AND mr.user_id = $1
+       )) as unread_count,
+      (SELECT COUNT(*) FROM messages msg
+       WHERE msg.conversation_id = c.id
+       AND msg.sender_id != $1
+       AND msg.mention_user_ids @> jsonb_build_array($1::text)
+       AND NOT EXISTS (
+         SELECT 1 FROM message_reads mr WHERE mr.message_id = msg.id AND mr.user_id = $1
+       )) as mention_unread_count
     FROM conversations c
     JOIN conversation_members cm ON c.id = cm.conversation_id
     LEFT JOIN LATERAL (
-      SELECT * FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
+      SELECT * FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
     ) m ON true
     LEFT JOIN users u ON m.sender_id = u.id
     WHERE cm.user_id = $1
@@ -82,7 +105,9 @@ router.get('/conversations', authMiddleware, async (req, res) => {
   res.json(result.map((conv) => ({
     ...conv,
     created_at: Number(conv.created_at),
-    last_message_at: conv.last_message_at == null ? null : Number(conv.last_message_at)
+    last_message_at: conv.last_message_at == null ? null : Number(conv.last_message_at),
+    unread_count: Number(conv.unread_count || 0),
+    mention_unread_count: Number(conv.mention_unread_count || 0)
   })));
 });
 
@@ -135,7 +160,9 @@ router.post('/conversations/group', authMiddleware, async (req, res) => {
     );
   }
 
-  res.json({ id, type: 'group', name, created_at: now });
+  notifyConversationMembership(req, allMembers, id, 'added');
+
+  res.json({ id, type: 'group', name, created_by: req.user.id, created_at: now });
 });
 
 router.get('/conversations/:id/members', authMiddleware, async (req, res) => {
@@ -146,12 +173,100 @@ router.get('/conversations/:id/members', authMiddleware, async (req, res) => {
   if (!isMember.rows[0]) return res.status(403).json({ error: '无权限' });
 
   const result = await query(`
-    SELECT u.id, u.nickname, u.avatar, u.status
+    SELECT u.id, u.username, u.nickname, u.avatar, u.status, cm.joined_at
     FROM conversation_members cm
     JOIN users u ON cm.user_id = u.id
     WHERE cm.conversation_id = $1
   `, [req.params.id]);
   res.json(result.rows);
+});
+
+router.post('/conversations/:id/members', authMiddleware, async (req, res) => {
+  const { memberIds } = req.body;
+  if (!Array.isArray(memberIds) || memberIds.length === 0) {
+    return res.status(400).json({ error: '至少选择一名成员' });
+  }
+
+  const conversationResult = await query(
+    'SELECT type, created_by FROM conversations WHERE id = $1',
+    [req.params.id]
+  );
+  const conversation = conversationResult.rows[0];
+  if (!conversation || conversation.type !== 'group') return res.status(404).json({ error: '群聊不存在' });
+  if (conversation.created_by !== req.user.id) return res.status(403).json({ error: '仅群主可以邀请成员' });
+
+  const uniqueIds = [...new Set(memberIds.filter((id) => typeof id === 'string' && id !== req.user.id))];
+  if (!uniqueIds.length) return res.status(400).json({ error: '请选择其他成员' });
+
+  const users = await query('SELECT id FROM users WHERE id = ANY($1::text[])', [uniqueIds]);
+  if (users.rows.length !== uniqueIds.length) return res.status(400).json({ error: '部分用户不存在' });
+
+  const currentMembers = await query(
+    'SELECT user_id FROM conversation_members WHERE conversation_id = $1 AND user_id = ANY($2::text[])',
+    [req.params.id, uniqueIds]
+  );
+  const existingIds = new Set(currentMembers.rows.map((row) => row.user_id));
+  const addedIds = uniqueIds.filter((id) => !existingIds.has(id));
+  const now = Date.now();
+  for (const userId of addedIds) {
+    await query(
+      'INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+      [req.params.id, userId, now]
+    );
+  }
+
+  notifyConversationMembership(req, addedIds, req.params.id, 'added');
+  notifyCurrentConversationMembers(req, req.params.id);
+  res.json({ added: addedIds.length });
+});
+
+router.delete('/conversations/:id/members/me', authMiddleware, async (req, res) => {
+  const conversationResult = await query(
+    'SELECT type, created_by FROM conversations WHERE id = $1',
+    [req.params.id]
+  );
+  const conversation = conversationResult.rows[0];
+  if (!conversation || conversation.type !== 'group') return res.status(404).json({ error: '群聊不存在' });
+
+  const result = await query(
+    'DELETE FROM conversation_members WHERE conversation_id = $1 AND user_id = $2 RETURNING user_id',
+    [req.params.id, req.user.id]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: '你已不在该群聊中' });
+
+  if (conversation.created_by === req.user.id) {
+    const successor = await query(
+      'SELECT user_id FROM conversation_members WHERE conversation_id = $1 ORDER BY joined_at ASC, user_id ASC LIMIT 1',
+      [req.params.id]
+    );
+    await query('UPDATE conversations SET created_by = $1 WHERE id = $2', [successor.rows[0]?.user_id || null, req.params.id]);
+  }
+
+  notifyConversationMembership(req, [req.user.id], req.params.id, 'removed');
+  notifyCurrentConversationMembers(req, req.params.id);
+  res.json({ ok: true });
+});
+
+router.delete('/conversations/:id/members/:userId', authMiddleware, async (req, res) => {
+  if (req.params.userId === req.user.id) return res.status(400).json({ error: '请使用退群操作' });
+
+  const conversationResult = await query(
+    'SELECT type, created_by FROM conversations WHERE id = $1',
+    [req.params.id]
+  );
+  const conversation = conversationResult.rows[0];
+  if (!conversation || conversation.type !== 'group') return res.status(404).json({ error: '群聊不存在' });
+  if (conversation.created_by !== req.user.id) return res.status(403).json({ error: '仅群主可以移除成员' });
+
+  const result = await query(
+    'DELETE FROM conversation_members WHERE conversation_id = $1 AND user_id = $2 RETURNING user_id',
+    [req.params.id, req.params.userId]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: '群成员不存在' });
+
+  notifyConversationMembership(req, [req.params.userId], req.params.id, 'removed');
+  notifyCurrentConversationMembers(req, req.params.id);
+  res.json({ ok: true });
 });
 
 // ============ 消息相关 ============
@@ -163,34 +278,69 @@ router.get('/conversations/:id/messages', authMiddleware, async (req, res) => {
   );
   if (!isMember.rows[0]) return res.status(403).json({ error: '无权限' });
 
-  const { before, limit = 50 } = req.query;
+  const { before, limit = 50, initial } = req.query;
   const pageSize = Math.min(parseInt(limit), 100);
 
   let result;
+  let firstUnreadMessageId = null;
   if (before) {
     result = await query(`
       SELECT m.*, u.nickname as sender_nickname, u.avatar as sender_avatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.conversation_id = $1 AND m.created_at < $2
-      ORDER BY m.created_at DESC
+      ORDER BY m.created_at DESC, m.id DESC
       LIMIT $3
     `, [req.params.id, parseInt(before), pageSize]);
+  } else if (initial === '1') {
+    const unread = await query(`
+      SELECT m.id, m.created_at
+      FROM messages m
+      WHERE m.conversation_id = $1 AND m.sender_id != $2
+      AND NOT EXISTS (
+        SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id AND mr.user_id = $2
+      )
+      ORDER BY m.created_at ASC, m.id ASC
+      LIMIT 1
+    `, [req.params.id, req.user.id]);
+
+    if (unread.rows[0]) {
+      firstUnreadMessageId = unread.rows[0].id;
+      result = await query(`
+        SELECT m.*, u.nickname as sender_nickname, u.avatar as sender_avatar
+        FROM messages m
+        JOIN users u ON m.sender_id = u.id
+        WHERE m.conversation_id = $1 AND (m.created_at, m.id) >= ($2, $3)
+        ORDER BY m.created_at ASC, m.id ASC
+        LIMIT $4
+      `, [req.params.id, unread.rows[0].created_at, unread.rows[0].id, pageSize]);
+    } else {
+      result = await query(`
+        SELECT m.*, u.nickname as sender_nickname, u.avatar as sender_avatar
+        FROM messages m
+        JOIN users u ON m.sender_id = u.id
+        WHERE m.conversation_id = $1
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT $2
+      `, [req.params.id, pageSize]);
+    }
   } else {
     result = await query(`
       SELECT m.*, u.nickname as sender_nickname, u.avatar as sender_avatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.conversation_id = $1
-      ORDER BY m.created_at DESC
+      ORDER BY m.created_at DESC, m.id DESC
       LIMIT $2
     `, [req.params.id, pageSize]);
   }
 
-  res.json(result.rows.reverse().map((message) => ({
+  const messages = (initial === '1' && firstUnreadMessageId ? result.rows : result.rows.reverse()).map((message) => ({
     ...message,
     created_at: Number(message.created_at)
-  })));
+  }));
+  if (initial === '1') return res.json({ messages, firstUnreadMessageId });
+  res.json(messages);
 });
 
 router.post('/conversations/:id/read', authMiddleware, async (req, res) => {

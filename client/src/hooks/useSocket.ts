@@ -14,6 +14,7 @@ export function useSocket() {
     setTyping,
     resetUnread,
     activeConvId,
+    setActiveConv,
     updateUserStatus,
     loadConversations,
     loadMessages
@@ -71,6 +72,18 @@ export function useSocket() {
       updateUserStatus(userId, status);
     });
 
+    socket.on('conversation_membership_changed', ({ conversationId, event }: {
+      conversationId: string;
+      event: 'added' | 'removed';
+    }) => {
+      void loadConversations();
+      if (event === 'removed' && activeConvRef.current === conversationId) setActiveConv('');
+    });
+
+    socket.on('conversation_members_changed', () => {
+      void loadConversations();
+    });
+
     return () => {
       socket.off('connect', syncMessages);
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -78,6 +91,8 @@ export function useSocket() {
       socket.off('message_update');
       socket.off('typing');
       socket.off('user_status');
+      socket.off('conversation_membership_changed');
+      socket.off('conversation_members_changed');
     };
   }, [token]);
 

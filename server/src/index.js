@@ -43,7 +43,7 @@ app.use((err, req, res, next) => {
 });
 
 // Socket.IO
-setupSocket(server);
+app.set('io', setupSocket(server));
 
 const PORT = process.env.PORT || 3001;
 

@@ -69,6 +69,9 @@ async function initSchema() {
         PRIMARY KEY (message_id, user_id)
       );
 
+      ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS mention_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+
       CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_members_user ON conversation_members(user_id);
     `);

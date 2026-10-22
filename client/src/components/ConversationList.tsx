@@ -33,8 +33,8 @@ export default function ConversationList() {
   });
 
   const handleSelect = (conv: Conversation) => {
+    loadMessages(conv.id, undefined, true);
     setActiveConv(conv.id);
-    loadMessages(conv.id);
     resetUnread(conv.id);
   };
 
@@ -116,6 +116,9 @@ export default function ConversationList() {
                     <span className="flex-shrink-0 ml-2 bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center leading-none">
                       {conv.unread_count! > 99 ? '99+' : conv.unread_count}
                     </span>
+                  )}
+                  {(conv.mention_unread_count || 0) > 0 && (
+                    <span className="flex-shrink-0 ml-1 bg-blue-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center" title="有人提到了你">@</span>
                   )}
                 </div>
               </div>

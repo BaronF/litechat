@@ -1,18 +1,20 @@
 import { create } from 'zustand';
 import { Conversation, Message } from '../types';
 import api from '../utils/api';
+import { useAuthStore } from './authStore';
 
 interface ChatState {
   conversations: Conversation[];
   activeConvId: string | null;
   messages: Record<string, Message[]>;
+  firstUnreadMessageIds: Record<string, string | null>;
   typingUsers: Record<string, { userId: string; nickname: string }[]>;
   isLoadingConvs: boolean;
   isLoadingMsgs: boolean;
 
   loadConversations: () => Promise<void>;
   setActiveConv: (id: string) => void;
-  loadMessages: (convId: string, before?: number) => Promise<Message[]>;
+  loadMessages: (convId: string, before?: number, initial?: boolean) => Promise<Message[]>;
   addMessage: (msg: Message) => void;
   updateMessage: (patch: Partial<Message> & { id: string; conversation_id: string }) => void;
   updateConvLastMessage: (msg: Message) => void;
@@ -27,6 +29,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConvId: null,
   messages: {},
+  firstUnreadMessageIds: {},
   typingUsers: {},
   isLoadingConvs: false,
   isLoadingMsgs: false,
@@ -43,14 +46,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setActiveConv: (id) => set({ activeConvId: id || null }),
 
-  loadMessages: async (convId, before) => {
+  loadMessages: async (convId, before, initial = false) => {
     set({ isLoadingMsgs: true });
     const existingIdsAtStart = new Set((get().messages[convId] || []).map((message) => message.id));
     try {
       const params: Record<string, string | number> = { limit: 50 };
       if (before) params.before = before;
+      if (initial) params.initial = 1;
       const res = await api.get(`/conversations/${convId}/messages`, { params });
-      const msgs: Message[] = res.data;
+      const msgs: Message[] = Array.isArray(res.data) ? res.data : res.data.messages;
       set((state) => {
         const existing = state.messages[convId] || [];
         const currentMessages = before
@@ -59,7 +63,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const byId = new Map(currentMessages.map((message) => [message.id, message]));
         msgs.forEach((message) => byId.set(message.id, message));
         const merged = [...byId.values()].sort((a, b) => a.created_at - b.created_at);
-        return { messages: { ...state.messages, [convId]: merged }, isLoadingMsgs: false };
+        return {
+          messages: { ...state.messages, [convId]: merged },
+          firstUnreadMessageIds: initial
+            ? { ...state.firstUnreadMessageIds, [convId]: res.data.firstUnreadMessageId || null }
+            : state.firstUnreadMessageIds,
+          isLoadingMsgs: false
+        };
       });
       return msgs;
     } catch {
@@ -98,6 +108,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   updateConvLastMessage: (msg) => {
+    const userId = useAuthStore.getState().user?.id;
+    const isMention = Boolean(userId && msg.mention_user_ids?.includes(userId));
     set((state) => {
       const convs = state.conversations.map(c => {
         if (c.id !== msg.conversation_id) return c;
@@ -108,7 +120,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           last_message_type: msg.type,
           last_message_at: msg.created_at,
           last_sender_nickname: msg.sender_nickname,
-          unread_count: isActive ? 0 : (c.unread_count || 0) + 1
+          unread_count: isActive ? 0 : (c.unread_count || 0) + 1,
+          mention_unread_count: isActive
+            ? 0
+            : (c.mention_unread_count || 0) + (isMention ? 1 : 0)
         };
       });
       // Sort by last message time
@@ -122,7 +137,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   resetUnread: (convId) => {
     set((state) => ({
       conversations: state.conversations.map(c =>
-        c.id === convId ? { ...c, unread_count: 0 } : c
+        c.id === convId ? { ...c, unread_count: 0, mention_unread_count: 0 } : c
       )
     }));
   },

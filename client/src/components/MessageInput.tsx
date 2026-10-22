@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Send, Image, Video, Mic
 } from 'lucide-react';
@@ -7,21 +7,71 @@ import { useChatStore } from '../store/chatStore';
 import api from '../utils/api';
 import { extractUrl } from '../utils/format';
 import VoiceRecorder from './VoiceRecorder';
-import { Message } from '../types';
+import { Message, User } from '../types';
+import { v4 as uuidv4 } from 'uuid';
 
 interface Props {
   conversationId: string;
+  isGroup: boolean;
 }
 
-export default function MessageInput({ conversationId }: Props) {
+interface MentionState {
+  start: number;
+  end: number;
+  query: string;
+}
+
+function findMentionAtCursor(value: string, cursor: number): MentionState | null {
+  const prefix = value.slice(0, cursor);
+  const match = prefix.match(/(^|\s)@([^\s@]*)$/);
+  if (!match) return null;
+  const atOffset = match[1].length;
+  return { start: prefix.length - match[0].length + atOffset, end: cursor, query: match[2] };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findMentionedMemberIds(value: string, members: User[]): string[] {
+  return members
+    .filter((member) => new RegExp(`(^|\\s)@${escapeRegExp(member.username)}(?=$|\\s|[.,!?，。！？])`).test(value))
+    .map((member) => member.id);
+}
+
+export default function MessageInput({ conversationId, isGroup }: Props) {
   const [text, setText] = useState('');
   const [showVoice, setShowVoice] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [sendFeedback, setSendFeedback] = useState('');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [members, setMembers] = useState<User[]>([]);
+  const [mentionState, setMentionState] = useState<MentionState | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingMessageRef = useRef<{ id: string; content: string } | null>(null);
   const { addMessage } = useChatStore();
+
+  useEffect(() => {
+    if (!isGroup) {
+      setMembers([]);
+      return;
+    }
+    let cancelled = false;
+    api.get(`/conversations/${conversationId}/members`).then((res) => {
+      if (!cancelled) setMembers(res.data);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [conversationId, isGroup]);
+
+  const mentionOptions = mentionState
+    ? members.filter((member) =>
+      `${member.nickname} ${member.username}`.toLowerCase().includes(mentionState.query.toLowerCase())
+    ).slice(0, 8)
+    : [];
 
   const emitTyping = useCallback((isTyping: boolean) => {
     const socket = getSocket();
@@ -29,7 +79,12 @@ export default function MessageInput({ conversationId }: Props) {
   }, [conversationId]);
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
+    const value = e.target.value;
+    setText(value);
+    if (pendingMessageRef.current?.content !== value.trim()) pendingMessageRef.current = null;
+    setSendFeedback('');
+    setMentionState(isGroup ? findMentionAtCursor(value, e.target.selectionStart) : null);
+    setMentionIndex(0);
     emitTyping(true);
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     typingTimerRef.current = setTimeout(() => emitTyping(false), 2000);
@@ -42,26 +97,105 @@ export default function MessageInput({ conversationId }: Props) {
     const url = extractUrl(trimmed);
     const type = url && trimmed === url ? 'link' : 'text';
     const content = type === 'link' ? url! : trimmed;
+    const mentionUserIds = type === 'text' ? findMentionedMemberIds(content, members) : [];
 
     const socket = getSocket();
-    if (!socket) return;
+    if (!socket) {
+      setSendFeedback('聊天连接尚未准备好，消息仍保留在输入框中，请稍后重试。');
+      return;
+    }
 
-    setText('');
+    const pending = pendingMessageRef.current;
+    const clientMessageId = pending?.content === content ? pending.id : uuidv4();
+    pendingMessageRef.current = { id: clientMessageId, content };
+    setIsSending(true);
+    setSendFeedback(socket.connected ? '正在发送...' : '正在连接聊天服务器...');
     emitTyping(false);
-    socket.emit('send_message', { conversationId, type, content }, (response: {
-      message?: Message;
-      error?: string;
-    }) => {
-      if (response.message) addMessage(response.message);
-      else if (response.error) setText(trimmed);
-    });
+
+    const sendWhenConnected = () => {
+      setSendFeedback('正在发送...');
+      socket.timeout(15000).emit('send_message', { conversationId, type, content, clientMessageId, mentionUserIds }, (
+        error: Error | null,
+        response?: {
+          message?: Message;
+          error?: string;
+        }
+      ) => {
+        setIsSending(false);
+        if (error) {
+          setSendFeedback('未收到服务器确认，消息草稿已保留；请先查看聊天记录再重试。');
+          return;
+        }
+        if (response?.error) {
+          pendingMessageRef.current = null;
+          setSendFeedback(response.error);
+          return;
+        }
+        if (!response?.message) {
+          setSendFeedback('发送失败，消息草稿已保留，请重试。');
+          return;
+        }
+
+        addMessage(response.message);
+        pendingMessageRef.current = null;
+        setText((current) => current.trim() === trimmed ? '' : current);
+        setMentionState(null);
+        setSendFeedback('');
+      });
+    };
+
+    if (socket.connected) {
+      sendWhenConnected();
+      return;
+    }
+
+    let connectionTimer: ReturnType<typeof setTimeout>;
+    const onConnect = () => {
+      clearTimeout(connectionTimer);
+      sendWhenConnected();
+    };
+    connectionTimer = setTimeout(() => {
+      socket.off('connect', onConnect);
+      setIsSending(false);
+      setSendFeedback('连接超时，消息已保留；连接恢复后请重新发送。');
+    }, 15000);
+    socket.once('connect', onConnect);
+    socket.connect();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionState && mentionOptions.length > 0 && e.key === 'ArrowDown') {
+      e.preventDefault();
+      setMentionIndex((index) => (index + 1) % mentionOptions.length);
+      return;
+    }
+    if (mentionState && mentionOptions.length > 0 && e.key === 'ArrowUp') {
+      e.preventDefault();
+      setMentionIndex((index) => (index - 1 + mentionOptions.length) % mentionOptions.length);
+      return;
+    }
+    if (mentionState && mentionOptions.length > 0 && e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      selectMention(mentionOptions[mentionIndex]);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendTextMessage();
     }
+  };
+
+  const selectMention = (member: User) => {
+    if (!mentionState) return;
+    const value = `${text.slice(0, mentionState.start)}@${member.username} ${text.slice(mentionState.end)}`;
+    const cursor = mentionState.start + member.username.length + 2;
+    setText(value);
+    setMentionState(null);
+    setMentionIndex(0);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(cursor, cursor);
+    });
   };
 
   const uploadAndSend = async (file: File, type: 'image' | 'video') => {
@@ -172,7 +306,29 @@ export default function MessageInput({ conversationId }: Props) {
         </div>
       )}
 
-      <div className="flex items-end gap-2 px-4 py-3">
+      {sendFeedback && (
+        <div role="status" aria-live="polite" className={`px-4 pt-2 text-xs ${isSending ? 'text-gray-500' : 'text-red-600'}`}>
+          {sendFeedback}
+        </div>
+      )}
+
+      <div className="relative flex items-end gap-2 px-4 py-3">
+        {mentionState && mentionOptions.length > 0 && (
+          <div className="absolute bottom-full left-16 right-16 mb-1 max-h-56 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg z-20">
+            {mentionOptions.map((member, index) => (
+              <button
+                key={member.id}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => selectMention(member)}
+                className={`w-full px-3 py-2 text-left ${index === mentionIndex ? 'bg-green-50' : 'hover:bg-gray-50'}`}
+              >
+                <span className="block text-sm text-gray-800">{member.nickname}</span>
+                <span className="block text-xs text-gray-400">@{member.username}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {/* Tools */}
         <div className="flex gap-1 pb-1">
           <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
@@ -206,10 +362,12 @@ export default function MessageInput({ conversationId }: Props) {
 
         {/* Text input */}
         <textarea
+          ref={textareaRef}
           value={text}
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          disabled={isSending}
           placeholder="输入消息，粘贴链接可预览...（Enter 发送，Shift+Enter 换行）"
           rows={1}
           className="flex-1 resize-none bg-gray-100 rounded-2xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-100 max-h-28 overflow-y-auto leading-relaxed"
@@ -223,8 +381,10 @@ export default function MessageInput({ conversationId }: Props) {
 
         {/* Send button */}
         <button
+          type="button"
           onClick={sendTextMessage}
           disabled={!text.trim() || isSending}
+          aria-label="发送消息"
           className="w-10 h-10 bg-green-500 hover:bg-green-600 disabled:bg-gray-200 rounded-full flex items-center justify-center transition-colors shadow flex-shrink-0"
         >
           <Send className="w-4 h-4 text-white" />

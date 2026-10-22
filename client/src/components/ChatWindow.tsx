@@ -4,6 +4,7 @@ import { useAuthStore } from '../store/authStore';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 import Avatar from './Avatar';
+import GroupInfoPanel from './GroupInfoPanel';
 import { getSocket } from '../hooks/useSocket';
 import { Users, ChevronLeft } from 'lucide-react';
 import { Message } from '../types';
@@ -37,11 +38,16 @@ function shouldShowAvatar(messages: Message[], index: number): boolean {
 }
 
 export default function ChatWindow() {
-  const { conversations, activeConvId, setActiveConv, messages, typingUsers, loadMessages, resetUnread } = useChatStore();
+  const {
+    conversations, activeConvId, setActiveConv, messages, typingUsers,
+    loadMessages, resetUnread, firstUnreadMessageIds, isLoadingMsgs
+  } = useChatStore();
   const { user } = useAuthStore();
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const positionedConversationRef = useRef<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
 
   const conversation = conversations.find(c => c.id === activeConvId);
   const convMessages = activeConvId ? (messages[activeConvId] || []) : [];
@@ -53,17 +59,28 @@ export default function ChatWindow() {
   const convAvatar = conversation?.type === 'private' ? conversation.otherUser?.avatar : conversation?.avatar;
   const isOnline = conversation?.type === 'private' ? conversation.otherUser?.status === 'online' : undefined;
 
-  // 初次加载后滚动到底部
+  // 首次进入时定位第一条未读；没有未读时显示最新消息。
   useEffect(() => {
-    if (activeConvId) {
+    if (!activeConvId) {
+      positionedConversationRef.current = null;
+      return;
+    }
+    if (isLoadingMsgs || positionedConversationRef.current === activeConvId) return;
+    positionedConversationRef.current = activeConvId;
+    const firstUnreadId = firstUnreadMessageIds[activeConvId];
+    const frame = requestAnimationFrame(() => {
+      const unreadElement = firstUnreadId
+        ? containerRef.current?.querySelector<HTMLElement>(`[data-message-id="${firstUnreadId}"]`)
+        : null;
+      if (unreadElement) unreadElement.scrollIntoView({ behavior: 'instant', block: 'center' });
+      else bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+
       const socket = getSocket();
       if (socket) socket.emit('mark_read', { conversationId: activeConvId });
       resetUnread(activeConvId);
-      setTimeout(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'instant' });
-      }, 50);
-    }
-  }, [activeConvId]);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeConvId, isLoadingMsgs, firstUnreadMessageIds, resetUnread]);
 
   // 新消息时滚到底部
   useEffect(() => {
@@ -141,6 +158,16 @@ export default function ChatWindow() {
               : conversation.type === 'group' ? '群聊' : ''}
           </p>
         </div>
+        {conversation.type === 'group' && (
+          <button
+            onClick={() => setShowGroupInfo(true)}
+            className="w-9 h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100"
+            title="群成员管理"
+            aria-label="群成员管理"
+          >
+            <Users className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       {/* Messages */}
@@ -160,7 +187,14 @@ export default function ChatWindow() {
         )}
 
         {convMessages.map((msg, i) => (
-          <React.Fragment key={msg.id}>
+          <div key={msg.id} data-message-id={msg.id}>
+            {msg.id === firstUnreadMessageIds[activeConvId] && (
+              <div className="flex items-center gap-3 my-4" role="separator" aria-label="以下为未读消息">
+                <div className="flex-1 h-px bg-red-200" />
+                <span className="text-xs text-red-500 px-2">以下为未读消息</span>
+                <div className="flex-1 h-px bg-red-200" />
+              </div>
+            )}
             {shouldShowDate(convMessages[i - 1], msg) && (
               <DateDivider timestamp={msg.created_at} />
             )}
@@ -169,7 +203,7 @@ export default function ChatWindow() {
               showAvatar={shouldShowAvatar(convMessages, i)}
               isGroup={conversation.type === 'group'}
             />
-          </React.Fragment>
+          </div>
         ))}
 
         {/* 正在输入 */}
@@ -192,7 +226,10 @@ export default function ChatWindow() {
       </div>
 
       {/* 输入框 */}
-      <MessageInput conversationId={activeConvId} />
+      <MessageInput conversationId={activeConvId} isGroup={conversation.type === 'group'} />
+      {showGroupInfo && (
+        <GroupInfoPanel conversation={conversation} onClose={() => setShowGroupInfo(false)} />
+      )}
     </div>
   );
 }
