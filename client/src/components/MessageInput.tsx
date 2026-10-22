@@ -54,7 +54,6 @@ export default function MessageInput({ conversationId, isGroup }: Props) {
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingMessageRef = useRef<{ id: string; content: string } | null>(null);
   const { addMessage } = useChatStore();
-
   useEffect(() => {
     if (!isGroup) {
       setMembers([]);

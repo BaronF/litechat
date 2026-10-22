@@ -86,8 +86,8 @@ function setupSocket(server) {
           : { rows: [] };
         const mentionUserIds = mentionUsers.rows
           .filter((member) => hasMentionToken(content, member.username))
-          .map((member) => member.id);
-
+          .map((member) => member.id)
+          .sort();
         const id = typeof clientMessageId === 'string' && clientMessageId.length <= 64
           ? clientMessageId
           : uuidv4();
